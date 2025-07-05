@@ -1,0 +1,22 @@
+include:
+  - project: 'your-org/common-cicd'
+    file: '/templates/prepare-workspace.yml'
+    ref: $CI_COMMIT_BRANCH
+  - project: 'your-org/common-cicd'
+    file: '/templates/build-springboot-image.yml'
+    ref: $CI_COMMIT_BRANCH
+  - project: 'your-org/common-cicd'
+    file: '/templates/deploy-springboot-image.yml'
+    ref: $CI_COMMIT_BRANCH
+  - project: 'your-org/common-cicd'
+    file: '/templates/execute-test.yml'
+    ref: $CI_COMMIT_BRANCH
+
+variables:
+  MODULE_NAME: $CI_PROJECT_NAMESPACE
+
+stages:
+  - prepare-workspace
+  - build-image
+  - deploy-image
+  - execute-test

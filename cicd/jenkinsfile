@@ -1,0 +1,179 @@
+// Maintaned by Osama Oransa
+// First execution will fail as parameters won't populated
+// Subsequent runs will succeed if you provide correct parameters
+def firstDeployment = "No";
+pipeline {
+	options {
+		// set a timeout of 20 minutes for this pipeline
+		timeout(time: 20, unit: 'MINUTES')
+	}
+    agent {
+    // Using the maven builder agent
+       label "maven"
+    }
+  stages {
+    stage('Setup Parameters') {
+            steps {
+                script { 
+                    properties([
+                        parameters([
+                        choice(
+                                choices: ['Yes', 'No'], 
+                                name: 'slackEnabled',
+                                description: 'Send Slack Notifications?'
+                            ),
+                        string(
+                                defaultValue: 'https://hooks.slack.com/services{your_webhook_url}', 
+                                name: 'slack_webhook', 
+                                trim: true,
+                                description: 'Slack WebHook URL'
+                            ),
+                        choice(
+                                choices: ['Yes', 'No'], 
+                                name: 'runSonarQube',
+                                description: 'Run Sonar Qube Analysis?'
+                            ),
+                        string(
+                                defaultValue: 'dev', 
+                                name: 'proj_name', 
+                                trim: true,
+                                description: 'Openshift Project Name'
+                            ),
+                        string(
+                                defaultValue: 'maven-app', 
+                                name: 'app_name', 
+                                trim: true,
+                                description: 'Maven Application Name'
+                            ),
+                        string(
+                                defaultValue: 'https://github.com/osa-ora/simple_java_maven', 
+                                name: 'git_url', 
+                                trim: true,
+                                description: 'Git Repository Location'
+                            ),
+                        string(
+                                defaultValue: 'http://sonarqube-cicd.apps.cluster-894c.894c.sandbox1092.opentlc.com', 
+                                name: 'sonarqube_url', 
+                                trim: true,
+                                description: 'Sonar Qube URL'
+                            ),
+                        string(
+                                defaultValue: 'maven', 
+                                name: 'sonarqube_proj', 
+                                trim: true,
+                                description: 'Sonar Qube Project Name'
+                            ),
+                        password(
+                                defaultValue: 'token_here', 
+                                name: 'sonarqube_token', 
+                                description: 'Sonar Qube Token'
+                            )
+                        ])
+                    ])
+                }
+            }
+    }
+    stage('Start Notification'){
+      when {
+        expression { slackEnabled == "Yes" }
+      }
+      steps {
+        sh "curl -X POST -H 'Content-type: application/json' --data '{\"text\":\"Pipeline execution started for ${git_url} - main branch \"}' ${slack_webhook}"  
+      }
+    }
+    stage('Code Checkout') {
+      steps {
+        git branch: 'main', url: '${git_url}'
+        sh "ls -l"
+      }
+    }
+    stage('Unit Testing & Code Coverage') {
+      steps {
+        sh "mvn test"
+        junit '**/TEST-*.xml'
+        publishHTML([allowMissing: false, alwaysLinkToLastBuild: true, keepAll: false, reportDir: 'target/site/jacoco', reportFiles: 'index.html', reportName: 'Unit Test Code Coverage', reportTitles: 'Code Coverage'])
+        sh 'mvn verify'
+      }
+    }
+    stage('Code Scanning by Sonar Qube') {
+        when {
+            expression { runSonarQube == "Yes" }
+        }
+        steps {
+            sh "mvn sonar:sonar -Dsonar.login=${sonarqube_token} -Dsonar.host.url=${sonarqube_url} -Dsonar.projectKey=${sonarqube_proj}"
+        }
+    }
+    stage('Build Deployment Package'){
+        steps{
+            sh "mvn package"
+            archiveArtifacts 'target/**/*.jar'
+        }
+    }
+    stage('Deployment Approval') {
+        steps {
+            timeout(time: 5, unit: 'MINUTES') {
+                input message: 'Proceed with Application Deployment?', ok: 'Approve Deployment'
+            }
+        }
+    }
+    stage("Check Deployment Status"){
+        steps {
+            script {
+              try {
+                    sh "oc get svc/${app_name} -n=${proj_name}"
+                    sh "oc get bc/${app_name} -n=${proj_name}"
+                    echo 'Already deployed, incremental deployment will be initiated!'
+                    firstDeployment = "No";
+              } catch (Exception ex) {
+                    echo 'Not deployed, initial deployment will be initiated!'
+                    firstDeployment = "Yes";
+              }
+            }
+        }
+    }
+    stage('Initial Deploy To Openshift') {
+        when {
+            expression { firstDeployment == "Yes" }
+        }
+        steps {
+            sh "oc new-build --image-stream=java:latest --binary=true --name=${app_name} -n=${proj_name}"
+            sh "mkdir target/jar"
+            sh "cp target/*.jar target/jar"
+            sh "oc start-build ${app_name} --from-dir=target/jar -n=${proj_name}"
+            sh "oc logs -f bc/${app_name} -n=${proj_name}"
+            sh "oc new-app ${app_name} -n=${proj_name}"
+            sh "oc expose svc ${app_name} --port=8080 --name=${app_name} -n=${proj_name}"
+        }
+    }
+    stage('Incremental Deploy To Openshift') {
+        when {
+            expression { firstDeployment == "No" }
+        }
+        steps {
+            sh "mkdir target/jar"
+            sh "cp target/*.jar target/jar"
+            sh "oc start-build ${app_name} --from-dir=target/jar -n=${proj_name}"
+            sh "oc logs -f bc/${app_name} -n=${proj_name}"
+        }
+    }
+    stage('Smoke Test') {
+        steps {
+            sleep(time:25,unit:"SECONDS")
+            sh "curl \$(oc get route ${app_name} -n=${proj_name} -o jsonpath='{.spec.host}')/loyalty/v1/balance/123 | grep '123'"
+        }
+    }
+    stage('End Notification'){
+      when {
+        expression { slackEnabled == "Yes" }
+      }
+      steps {
+        sh "curl -X POST -H 'Content-type: application/json' --data '{\"text\":\"Pipeline execution finished for ${git_url} - main branch \"}' ${slack_webhook}"  
+      }
+    }
+  }
+   post {
+      failure {
+            sh "curl -X POST -H 'Content-type: application/json' --data '{\"text\":\"Pipeline execution failed for ${git_url} - main branch \"}' ${slack_webhook}"  
+      }
+   }
+} // pipeline

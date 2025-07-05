@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: maven-app
+data:
+  test1: hello
+  test2: world
