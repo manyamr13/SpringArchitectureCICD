@@ -31,7 +31,6 @@ oc policy add-role-to-user edit system:serviceaccount:cicd:default -n dev
 oc policy add-role-to-user edit system:serviceaccount:cicd:jenkins -n dev
 ```
 
-
 ## 2) Configure Jenkins 
 No need as Jenkins already come with pre-configured maven slave image.
 From inside Jenkins --> go to Manage Jenkins ==> Configure Jenkins then scroll to cloud section:
